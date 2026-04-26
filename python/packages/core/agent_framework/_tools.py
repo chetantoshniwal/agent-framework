@@ -506,6 +506,7 @@ class FunctionTool(SerializationMixin):
         *,
         arguments: BaseModel | Mapping[str, Any] | None = None,
         context: FunctionInvocationContext | None = None,
+        _approved: bool = False,
         **kwargs: Any,
     ) -> list[Content]:
         """Run the AI function with the provided arguments as a Pydantic model.
@@ -518,6 +519,10 @@ class FunctionTool(SerializationMixin):
         Keyword Args:
             arguments: A mapping or model instance containing the arguments for the function.
             context: Explicit function invocation context carrying runtime kwargs.
+            _approved: Internal flag set by the auto-invocation pipeline after the
+                approval gate in ``_try_execute_function_calls`` has been satisfied.
+                Callers outside the pipeline must obtain human approval and pass
+                ``_approved=True`` to execute tools with ``approval_mode='always_require'``.
             kwargs: Deprecated keyword arguments to pass to the function. Use ``context`` instead.
 
         Returns:
@@ -525,9 +530,18 @@ class FunctionTool(SerializationMixin):
 
         Raises:
             TypeError: If arguments is not mapping-like or fails schema checks.
+            ToolApprovalRequiredException: If the tool requires approval and ``_approved`` is False.
         """
         if self.declaration_only:
             raise ToolException(f"Function '{self.name}' is declaration only and cannot be invoked.")
+        if self.approval_mode == "always_require" and not _approved:
+            from .exceptions import ToolApprovalRequiredException
+
+            raise ToolApprovalRequiredException(
+                f"Function '{self.name}' requires human approval (approval_mode='always_require'). "
+                "The auto-invocation pipeline handles this automatically. If calling invoke() "
+                "directly, obtain human approval first and pass _approved=True."
+            )
         global OBSERVABILITY_SETTINGS
         from ._middleware import FunctionInvocationContext
         from ._types import Content
@@ -1418,6 +1432,7 @@ async def _auto_invoke_function(
             function_result = await tool.invoke(
                 arguments=args,
                 context=direct_context,
+                _approved=True,
                 tool_call_id=function_call_content.call_id,
             )
             return Content.from_function_result(
@@ -1449,6 +1464,7 @@ async def _auto_invoke_function(
         return await tool.invoke(
             arguments=context_obj.arguments,
             context=context_obj,
+            _approved=True,
             tool_call_id=function_call_content.call_id,
         )
 
